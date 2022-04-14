@@ -478,7 +478,7 @@ void rec_spgemm(
     gko::matrix::Csr<ValueType, IndexType>* c, IndexType recursive_splits,
     std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result)
 {
-    v_recursive_spgemm<double,int>(a, b, a_T, b_T, recursive_splits,
+    v_recursive_spgemm<double, int>(a, b, a_T, b_T, recursive_splits,
                                     recursive_splits, 0, a->get_size()[0], 0,
                                     b->get_size()[1], result);
     std::sort(result.begin(), result.end());
@@ -509,7 +509,8 @@ void rec_spgemm(
 }
 
 //-----------------------------------------------------------------------------------------------------------
-// -----------------------------------------------  Tests  --------------------------------------------------
+// -----------------------------------------------  Tests
+// --------------------------------------------------
 //-----------------------------------------------------------------------------------------------------------
 
 auto a = gko::read<mtx>(std::ifstream("../data/a2.mtx"), exec);
@@ -518,13 +519,13 @@ auto a_row_ptrs = a -> get_row_ptrs();
 auto const_a_row_ptrs = a -> get_const_row_ptrs();
 auto num_rows = a -> get_size()[0];
 
-//testing the generation of number of recursive splits needed
+// testing the generation of number of recursive splits needed
 TEST(example, recursive_splits)
 {
     int m = 9;  // size of the fast memory
-    auto res = recursive_splits<size_type>(
-    m, a->get_num_stored_elements(), b->get_num_stored_elements(),
-    a->get_size()[0], b->get_size()[1]);
+    auto res = recursive_splits<size_type>(m, a->get_num_stored_elements(),
+                                           b->get_num_stored_elements(),
+                                           a->get_size()[0], b->get_size()[1]);
     ASSERT_NEAR(res, 4, 1.0e-11);
 }
 
@@ -532,13 +533,14 @@ TEST(example, recursive_splits)
 // testing the generation of the split index the maximize the balance
 TEST(example, split_idx)
 {
-    int start=0;
-    int end=6;//num_rows;
+    int start = 0;
+    int end = 6;  // num_rows;
     auto s1 = split_idx<gko::size_type, int>(
-            a_row_ptrs, (a_row_ptrs[0] + a_row_ptrs[num_rows]) / 2, 0,
-num_rows); auto s2 = split_idx<gko::size_type, int>( a_row_ptrs, (a_row_ptrs[0]
-+ a_row_ptrs[6]) / 2, 0, 6); auto s3 = split_idx<gko::size_type, int>(
-            a_row_ptrs, (a_row_ptrs[0] + a_row_ptrs[4]) / 2, 0, 4);
+        a_row_ptrs, (a_row_ptrs[0] + a_row_ptrs[num_rows]) / 2, 0, num_rows);
+    auto s2 = split_idx<gko::size_type, int>(
+        a_row_ptrs, (a_row_ptrs[0] + a_row_ptrs[6]) / 2, 0, 6);
+    auto s3 = split_idx<gko::size_type, int>(
+        a_row_ptrs, (a_row_ptrs[0] + a_row_ptrs[4]) / 2, 0, 4);
     ASSERT_NEAR(s1, 5, 1.0e-11);
     ASSERT_NEAR(s2, 3, 1.0e-11);
     ASSERT_NEAR(s3, 2, 1.0e-11);
@@ -547,28 +549,31 @@ num_rows); auto s2 = split_idx<gko::size_type, int>( a_row_ptrs, (a_row_ptrs[0]
 // test for binary search function
 TEST(example, binary_search)
 {
-    int start=0;
-    int end=6;//num_rows;
+    int start = 0;
+    int end = 6;  // num_rows;
     auto s1 = binary_search<gko::size_type, int>(
-            const_a_row_ptrs, (const_a_row_ptrs[0] + const_a_row_ptrs[num_rows])
-/ 2, 0, num_rows); auto s2 = binary_search<gko::size_type, int>(
-            const_a_row_ptrs, (const_a_row_ptrs[0] + const_a_row_ptrs[6]) / 2,
-0, 6); auto s3 = binary_search<gko::size_type, int>( const_a_row_ptrs,
-(const_a_row_ptrs[0] + const_a_row_ptrs[4]) / 2, 0, 4); ASSERT_NEAR(s1,
-5, 1.0e-11); ASSERT_NEAR(s2, 4, 1.0e-11); ASSERT_NEAR(s3, 2, 1.0e-11);
+        const_a_row_ptrs,
+        (const_a_row_ptrs[0] + const_a_row_ptrs[num_rows]) / 2, 0, num_rows);
+    auto s2 = binary_search<gko::size_type, int>(
+        const_a_row_ptrs, (const_a_row_ptrs[0] + const_a_row_ptrs[6]) / 2, 0,
+        6);
+    auto s3 = binary_search<gko::size_type, int>(
+        const_a_row_ptrs, (const_a_row_ptrs[0] + const_a_row_ptrs[4]) / 2, 0,
+        4);
+    ASSERT_NEAR(s1, 5, 1.0e-11);
+    ASSERT_NEAR(s2, 4, 1.0e-11);
+    ASSERT_NEAR(s3, 2, 1.0e-11);
 }
 
 TEST(example, generate_offsets)
 {
-    std::vector<int> result{3,5,7};
+    std::vector<int> result{3, 5, 7};
     std::vector<int> a_offsets{};
-    generate_offsets<int>(a_offsets, a_row_ptrs, 2, 0,
-                          num_rows);
-    auto idx1=a_offsets.begin();
-    auto idx2=result.begin();
+    generate_offsets<int>(a_offsets, a_row_ptrs, 2, 0, num_rows);
+    auto idx1 = a_offsets.begin();
+    auto idx2 = result.begin();
 
-    for (int i=0;i<3;i++)
-    {
+    for (int i = 0; i < 3; i++) {
         ASSERT_NEAR(*idx1, *idx2, 1.0e-11);
         idx1++;
         idx2++;
@@ -657,7 +662,8 @@ TEST(example, rec_spgemm)
     A->apply(B.get(), C.get());
     std::vector<std ::tuple<int, int, double>> result;
 
-    rec_spgemm<double, int>(A.get(), B.get(), a_T.get(), b_T.get(),C2.get(), 2, result);
+    rec_spgemm<double, int>(A.get(), B.get(), a_T.get(), b_T.get(), C2.get(), 2,
+                            result);
     /*v_recursive_spgemm<double, int>(A.get(), B.get(), a_T.get(), b_T.get(),
        2,2, 0, A->get_size()[0], 0, B->get_size()[1], result);*/
     std::sort(result.begin(), result.end());
@@ -680,7 +686,8 @@ TEST(example, rec_spgemm)
 }
 
 //-----------------------------------------------------------------------------------------------------------
-// ----------------------------------------------- Benchmarks -----------------------------------------------
+// ----------------------------------------------- Benchmarks
+// -----------------------------------------------
 //-----------------------------------------------------------------------------------------------------------
 
 auto A = gko::read<mtx>(std::ifstream("../data/a9.mtx"), exec);
@@ -694,12 +701,14 @@ static void BM_OLD_SpGEMM(benchmark::State& state)
     for (auto _ : state) {
         auto A = gko::read<mtx>(
             std::ifstream("../data/a" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
+                          ".mtx"),
+            exec);
         auto B = gko::read<mtx>(
             std::ifstream("../data/b" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
-        auto C = mtx::create(exec,
-                             gko::dim<2>{A->get_size()[0], B->get_size()[1]});
+                          ".mtx"),
+            exec);
+        auto C =
+            mtx::create(exec, gko::dim<2>{A->get_size()[0], B->get_size()[1]});
         A->apply(B.get(), C.get());
     }
 }
@@ -707,42 +716,47 @@ BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 
 static void BM_SpGEMM(benchmark::State& state)
 {
-    for (auto _ : state) {auto A = gko::read<mtx>(
+    for (auto _ : state) {
+        auto A = gko::read<mtx>(
             std::ifstream("../data/a" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
+                          ".mtx"),
+            exec);
         auto B = gko::read<mtx>(
             std::ifstream("../data/b" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
-        auto C = mtx::create(exec,
-                             gko::dim<2>{A->get_size()[0], B->get_size()[1]});
+                          ".mtx"),
+            exec);
+        auto C =
+            mtx::create(exec, gko::dim<2>{A->get_size()[0], B->get_size()[1]});
         std::vector<std ::tuple<int, int, double>> result;
-        spgemm<double, int>(A.get(), B.get(),2, result, C.get());
+        spgemm<double, int>(A.get(), B.get(), 2, result, C.get());
     }
 }
-    BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
+BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 
 static void BM_REC_SpGEMM(benchmark::State& state)
 {
     for (auto _ : state) {
         auto A = gko::read<mtx>(
             std::ifstream("../data/a" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
+                          ".mtx"),
+            exec);
         auto B = gko::read<mtx>(
             std::ifstream("../data/b" + std::to_string(state.range(0)) +
-                          ".mtx"),exec);
-        auto C = mtx::create(exec,
-                             gko::dim<2>{A->get_size()[0], B->get_size()[1]});
+                          ".mtx"),
+            exec);
+        auto C =
+            mtx::create(exec, gko::dim<2>{A->get_size()[0], B->get_size()[1]});
         auto a_T = gko::as<gko::matrix::Csr<double, int>>(A->transpose());
         auto b_T = gko::as<gko::matrix::Csr<double, int>>(B->transpose());
         std::vector<std ::tuple<int, int, double>> result;
-        
-                //rec_spgemm contains all the code down
-                
-        //rec_spgemm<double,int>(A.get(),B.get(),a_T.get(),b_T.get(),C.get(),2,result); 
-       
-        v_recursive_spgemm<double, int>(
-            A.get(), B.get(), a_T.get(), b_T.get(), 2, 2, 0,
-             a->get_size()[0], 0, b->get_size()[1], result);
+
+        // rec_spgemm contains all the code down
+
+        // rec_spgemm<double,int>(A.get(),B.get(),a_T.get(),b_T.get(),C.get(),2,result);
+
+        v_recursive_spgemm<double, int>(A.get(), B.get(), a_T.get(), b_T.get(),
+                                        2, 2, 0, a->get_size()[0], 0,
+                                        b->get_size()[1], result);
         std::sort(result.begin(), result.end());
         auto c_row_ptrs = C->get_row_ptrs();
         gko::matrix::CsrBuilder<double, int> c_builder{C.get()};
@@ -812,12 +826,12 @@ static void BM_OVERLAP(benchmark::State& state)
 //BENCHMARK(BM_OVERLAP);
 */
 
-//Main for running benchmarks 
+// Main for running benchmarks
 
 BENCHMARK_MAIN();
 
 
-//Main for running tests 
+// Main for running tests
 /*
 int main(int argc, char** argv)
 {

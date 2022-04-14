@@ -17,49 +17,51 @@
 #include "gtest/gtest.h"
 
 
+template <typename ValueType, typename IndexType>
+void swap(std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,
+          IndexType a, IndexType b)
+{
+    auto t = result[a];
+    result[a] = result[b];
+    result[b] = t;
+}
 
 template <typename ValueType, typename IndexType>
-void swap(std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,IndexType a, IndexType b)
+IndexType partition(
+    std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,
+    IndexType low, IndexType high)
 {
-	auto t = result[a];
-	result[a] = result[b];
-	result[b]= t;
+    auto pivot = result[high];
+    auto i = (low - 1);
+    for (IndexType j = low; j <= high - 1; j++) {
+        if ((std::get<0>(result[j]) < std::get<0>(pivot)) ||
+            ((std::get<0>(result[j]) == std::get<0>(pivot)) &&
+             (std::get<1>(result[j]) <= std::get<1>(pivot)))) {
+            i++;
+            swap(result, i, j);
+        }
+    }
+    swap(result, i + 1, high);
+    return (i + 1);
 }
 
-template<typename ValueType, typename IndexType>
-IndexType partition (std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result, IndexType low, IndexType high)
+template <typename ValueType, typename IndexType>
+void quickSort(
+    std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,
+    IndexType low, IndexType high)
 {
-	auto pivot = result[high]; 
-	auto i = (low - 1); 
-	for (IndexType j = low; j <= high- 1; j++)
-	{
-		if ((std::get<0>(result[j]) < std::get<0>(pivot))||((std::get<0>(result[j]) == std::get<0>(pivot))&&(std::get<1>(result[j]) <= std::get<1>(pivot))))
-		{
-			i++; 
-			swap(result,i,j);
-		}
-	}
-	swap(result,i+1,high);
-	return (i + 1);
+    if (low < high) {
+        IndexType pi = partition(result, low, high);
+#pragma omp task shared(result)  // firstprivate(result,low,pi)
+        {
+            quickSort(result, low, pi - 1);
+        }
+        //#pragma omp task firstprivate(arr, high,pi)
+        {
+            quickSort(result, pi + 1, high);
+        }
+    }
 }
-
-template<typename ValueType, typename IndexType>
-void quickSort(std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result, IndexType low, IndexType high)
-{
-	if (low < high)
-	{
-		IndexType pi = partition(result, low, high);
-		#pragma omp task shared (result)//firstprivate(result,low,pi)
-		{
-			quickSort(result,low, pi - 1);
-		}
-		//#pragma omp task firstprivate(arr, high,pi)
-		{
-			quickSort(result, pi + 1, high);
-		}
-	}
-}
-
 
 
 typedef std::pair<int, int> pair;
@@ -290,7 +292,7 @@ void unit_spgemm2(const gko::matrix::Csr<ValueType, IndexType>* a,
         }
     }
 }
- 
+
 struct pair_hash {
     template <class T1, class T2>
     std::size_t operator()(const std::pair<T1, T2>& p) const
@@ -343,9 +345,6 @@ void unit_spgemm3(
         result.push_back(std::tuple<int, int, double>(
             elem.first, elem.second, matrix[elem.first][elem.second]));
 }
-
-
-
 
 
 template <typename ValueType, typename IndexType>
@@ -460,7 +459,7 @@ void h_recursive_spgemm(
 
 template <typename ValueType, typename IndexType>
 void v_recursive_spgemm(
-    gko::matrix::Csr<ValueType, IndexType>* a, 
+    gko::matrix::Csr<ValueType, IndexType>* a,
     gko::matrix::Csr<ValueType, IndexType>* b,
     gko::matrix::Csr<ValueType, IndexType>* a_T,
     gko::matrix::Csr<ValueType, IndexType>* b_T, IndexType v_recursive_splits,
@@ -490,22 +489,21 @@ void v_recursive_spgemm(
 #pragma omp taskwait
         result.insert(result.end(), result1.begin(), result1.end());
         result.insert(result.end(), result2.begin(), result2.end());
-    }    
-
+    }
 }
 
 template <typename ValueType, typename IndexType>
-void rec_spgemm(
-    gko::matrix::Csr<ValueType, IndexType>* a,
-    gko::matrix::Csr<ValueType, IndexType>* b, IndexType recursive_splits,
-    gko::matrix::Csr<ValueType, IndexType>* c)
+void rec_spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
+                gko::matrix::Csr<ValueType, IndexType>* b,
+                IndexType recursive_splits,
+                gko::matrix::Csr<ValueType, IndexType>* c)
 {
     auto a_T = gko::as<gko::matrix::Csr<double, int>>(a->transpose());
     auto b_T = gko::as<gko::matrix::Csr<double, int>>(b->transpose());
     std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
     v_recursive_spgemm<ValueType, IndexType>(
-        a, b, a_T.get(), b_T.get(), recursive_splits, recursive_splits, 0, a->get_size()[0],
-        0, b->get_size()[1], result);
+        a, b, a_T.get(), b_T.get(), recursive_splits, recursive_splits, 0,
+        a->get_size()[0], 0, b->get_size()[1], result);
     std::sort(result.begin(), result.end());
     auto c_row_ptrs = c->get_row_ptrs();
     gko::matrix::CsrBuilder<double, int> c_builder{c};
@@ -534,7 +532,8 @@ void rec_spgemm(
 }
 
 //-----------------------------------------------------------------------------------------------------------
-// -----------------------------------------------  Tests  --------------------------------------------------
+// -----------------------------------------------  Tests
+// --------------------------------------------------
 //-----------------------------------------------------------------------------------------------------------
 
 auto a = gko::read<mtx>(std::ifstream("../data/a2.mtx"), exec);
@@ -672,7 +671,8 @@ TEST(example, v_recursive_spgemm)
 }
 
 //-----------------------------------------------------------------------------------------------------------
-// ----------------------------------------------- Benchmarks -----------------------------------------------
+// ----------------------------------------------- Benchmarks
+// -----------------------------------------------
 //-----------------------------------------------------------------------------------------------------------
 
 auto A = gko::read<mtx>(std::ifstream("../data/a9.mtx"), omp_exec);
@@ -701,7 +701,8 @@ BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 
 static void BM_SpGEMM(benchmark::State& state)
 {
-    for (auto _ : state) {auto A = gko::read<mtx>(
+    for (auto _ : state) {
+        auto A = gko::read<mtx>(
             std::ifstream("../data/a" + std::to_string(state.range(0)) +
                           ".mtx"),
             omp_exec);
@@ -712,7 +713,7 @@ static void BM_SpGEMM(benchmark::State& state)
         auto C = mtx::create(omp_exec,
                              gko::dim<2>{A->get_size()[0], B->get_size()[1]});
         std::vector<std ::tuple<int, int, double>> result;
-        spgemm<double, int>(A.get(), B.get(),2, result, C.get());
+        spgemm<double, int>(A.get(), B.get(), 2, result, C.get());
     }
 }
 BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
@@ -733,19 +734,21 @@ static void BM_REC_SpGEMM(benchmark::State& state)
         auto a_T = gko::as<gko::matrix::Csr<double, int>>(A->transpose());
         auto b_T = gko::as<gko::matrix::Csr<double, int>>(B->transpose());
         std::vector<std ::tuple<int, int, double>> result;
-            //rec_spgemm contains all the code down
- /*       
+        // rec_spgemm contains all the code down
+        /*
+       #pragma omp parallel
+       #pragma omp single
+               rec_spgemm<double,int>(A.get(),B.get(),a_T.get(),b_T.get(),2,result,C.get());
+       */
 #pragma omp parallel
-#pragma omp single     
-        rec_spgemm<double,int>(A.get(),B.get(),a_T.get(),b_T.get(),2,result,C.get());
-*/
-#pragma omp parallel
-{
-    #pragma omp single
-        {v_recursive_spgemm<double, int>(
-            A.get(), B.get(), a_T.get(), b_T.get(), 2, 2, 0,
-             a->get_size()[0], 0, b->get_size()[1], result);
-             }}
+        {
+#pragma omp single
+            {
+                v_recursive_spgemm<double, int>(
+                    A.get(), B.get(), a_T.get(), b_T.get(), 2, 2, 0,
+                    a->get_size()[0], 0, b->get_size()[1], result);
+            }
+        }
         std::sort(result.begin(), result.end());
         auto c_row_ptrs = C->get_row_ptrs();
         gko::matrix::CsrBuilder<double, int> c_builder{C.get()};
@@ -829,12 +832,12 @@ static void BM_OVERLAP(benchmark::State& state)
 BENCHMARK(BM_OVERLAP);
 */
 
-//Main for running benchmarks 
+// Main for running benchmarks
 
 BENCHMARK_MAIN();
 
 
-//Main for running tests 
+// Main for running tests
 /*
 int main(int argc, char** argv)
 {
