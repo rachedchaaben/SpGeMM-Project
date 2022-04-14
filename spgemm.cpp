@@ -703,7 +703,7 @@ static void BM_OLD_SpGEMM(benchmark::State& state)
         A->apply(B.get(), C.get());
     }
 }
-BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19)->Arg(10);
+BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 
 static void BM_SpGEMM(benchmark::State& state)
 {
@@ -719,7 +719,7 @@ static void BM_SpGEMM(benchmark::State& state)
         spgemm<double, int>(A.get(), B.get(),2, result, C.get());
     }
 }
-    BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19)->Arg(10);
+    BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 
 static void BM_REC_SpGEMM(benchmark::State& state)
 {
@@ -770,7 +770,7 @@ static void BM_REC_SpGEMM(benchmark::State& state)
         }
     }
 }
-BENCHMARK(BM_REC_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19)->Arg(10);
+BENCHMARK(BM_REC_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
 /*
 static void BM_UNIT_SPGEMM1(benchmark::State& state)
 {
