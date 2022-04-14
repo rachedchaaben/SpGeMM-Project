@@ -1,0 +1,64 @@
+%%MatrixMarket matrix coordinate pattern general
+%-------------------------------------------------------------------------------
+% UF Sparse Matrix Collection, Tim Davis
+% http://www.cise.ufl.edu/research/sparse/matrices/HB/jgl009
+% name: HB/jgl009
+% [U JOHN G. LEWIS P4 COUNTEREXAMPLE WHICH REQUIRES FILL IN SPIKES]
+% id: 185
+% date: 1983
+% author: J. Lewis
+% ed: I. Duff, R. Grimes, J. Lewis
+% fields: title A name id date author ed kind
+% kind: counter-example problem
+%-------------------------------------------------------------------------------
+9 9 50
+1 1
+2 1
+4 1
+5 1
+6 1
+7 1
+8 1
+9 1
+2 2
+3 2
+8 2
+9 2
+2 3
+3 3
+4 3
+5 3
+6 3
+7 3
+8 3
+9 3
+4 4
+5 4
+6 4
+7 4
+8 4
+9 4
+4 5
+5 5
+6 5
+7 5
+8 5
+9 5
+4 6
+5 6
+6 6
+7 6
+8 6
+9 6
+1 7
+2 7
+3 7
+8 7
+9 7
+8 8
+9 8
+1 9
+2 9
+3 9
+8 9
+9 9
