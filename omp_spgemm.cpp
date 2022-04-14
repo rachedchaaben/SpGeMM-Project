@@ -350,9 +350,8 @@ void unit_spgemm3(
 template <typename ValueType, typename IndexType>
 void spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
             gko::matrix::Csr<ValueType, IndexType>* b,
-            IndexType recursive_splits,
-            std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,
-            gko::matrix::Csr<ValueType, IndexType>* c)
+            gko::matrix::Csr<ValueType, IndexType>* c,
+            IndexType recursive_splits)
 {
     auto num_rows_c = a->get_size()[0];
     auto num_cols_c = b->get_size()[1];
@@ -371,6 +370,7 @@ void spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
     b_offsets.push_back((int)num_cols_c);
 
     // Calculation of all the small blocks
+std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
 #pragma omp parallel for collapse(2)
     for (auto row_idx = a_offsets.begin() + 1; row_idx < a_offsets.end();
          row_idx++) {
@@ -495,8 +495,8 @@ void v_recursive_spgemm(
 template <typename ValueType, typename IndexType>
 void rec_spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
                 gko::matrix::Csr<ValueType, IndexType>* b,
-                IndexType recursive_splits,
-                gko::matrix::Csr<ValueType, IndexType>* c)
+                gko::matrix::Csr<ValueType, IndexType>* c,
+                IndexType recursive_splits)
 {
     auto a_T = gko::as<gko::matrix::Csr<double, int>>(a->transpose());
     auto b_T = gko::as<gko::matrix::Csr<double, int>>(b->transpose());
@@ -615,23 +615,22 @@ TEST(example, spgemm)
     auto b_T_row_ptrs = b_T->get_row_ptrs();
     auto num_cols = B->get_size()[1];
     A->apply(B.get(), C.get());
-    std::vector<std ::tuple<int, int, double>> result;
-    spgemm<double, int>(A.get(), B.get(), 2, result, C2.get());
-    std::sort(result.begin(), result.end());
-    auto entry = result.begin();
-
+    spgemm<double, int>(A.get(), B.get(), C2.get(), 2);
     auto c_row_ptrs = C->get_row_ptrs();
     auto c_col_idxs = C->get_col_idxs();
-    auto c_vals = C->get_values();
-
+    auto c_vals = C->get_values();   
+    auto c2_row_ptrs = C2->get_row_ptrs();
+    auto c2_col_idxs = C2->get_col_idxs();
+    auto c2_vals = C2->get_values();
+    auto num_entries_c=C->get_num_stored_elements();
+    auto num_entries_c2=C2->get_num_stored_elements();
+    ASSERT_NEAR(num_entries_c,num_entries_c2, 1.0e-11);
     for (auto row = 0; row < C->get_size()[0]; ++row) {
         for (auto ent = c_row_ptrs[row]; ent < c_row_ptrs[row + 1]; ++ent) {
-            auto col = c_col_idxs[ent];
-            auto val = c_vals[ent];
-            ASSERT_NEAR(row + 1, std::get<0>(*entry), 1.0e-11);
-            ASSERT_NEAR(col + 1, std::get<1>(*entry), 1.0e-11);
-            ASSERT_NEAR(val, std::get<2>(*entry), 1.0e-11);
-            entry++;
+            auto col = c_col_idxs[ent]; auto col2 = c2_col_idxs[ent];;
+            auto val = c_vals[ent]; auto val2 = c2_vals[ent];
+            ASSERT_NEAR(col,col2, 1.0e-11);
+            ASSERT_NEAR(val,val2, 1.0e-11);
         }
     }
 }
@@ -666,6 +665,40 @@ TEST(example, v_recursive_spgemm)
             ASSERT_NEAR(col + 1, std::get<1>(*entry), 1.0e-11);
             ASSERT_NEAR(val, std::get<2>(*entry), 1.0e-11);
             entry++;
+        }
+    }
+}
+
+TEST(example, rec_spgemm)
+{
+    auto A = gko::read<mtx>(std::ifstream("../data/a5.mtx"), exec);
+    auto B = gko::read<mtx>(std::ifstream("../data/b5.mtx"), exec);
+    auto C = mtx::create(exec, gko::dim<2>{A->get_size()[0], B->get_size()[1]});
+    auto C2 =
+        mtx::create(exec, gko::dim<2>{A->get_size()[0], B->get_size()[1]});
+    auto a_row_ptrs = A->get_row_ptrs();
+    auto a_T = gko::as<gko::matrix::Csr<double, int>>(A->transpose());
+    auto b_T = gko::as<gko::matrix::Csr<double, int>>(B->transpose());
+    auto b_T_row_ptrs = b_T->get_row_ptrs();
+    auto num_cols = B->get_size()[1];
+    A->apply(B.get(), C.get());
+    rec_spgemm<double, int>(A.get(), B.get(), C2.get(), 2);
+
+    auto c_row_ptrs = C->get_row_ptrs();
+    auto c_col_idxs = C->get_col_idxs();
+    auto c_vals = C->get_values();   
+    auto c2_row_ptrs = C2->get_row_ptrs();
+    auto c2_col_idxs = C2->get_col_idxs();
+    auto c2_vals = C2->get_values();
+    auto num_entries_c=C->get_num_stored_elements();
+    auto num_entries_c2=C2->get_num_stored_elements();
+    ASSERT_NEAR(num_entries_c,num_entries_c2, 1.0e-11);
+    for (auto row = 0; row < C->get_size()[0]; ++row) {
+        for (auto ent = c_row_ptrs[row]; ent < c_row_ptrs[row + 1]; ++ent) {
+            auto col = c_col_idxs[ent]; auto col2 = c2_col_idxs[ent];;
+            auto val = c_vals[ent]; auto val2 = c2_vals[ent];
+            ASSERT_NEAR(col,col2, 1.0e-11);
+            ASSERT_NEAR(val,val2, 1.0e-11);
         }
     }
 }
@@ -712,8 +745,7 @@ static void BM_SpGEMM(benchmark::State& state)
             omp_exec);
         auto C = mtx::create(omp_exec,
                              gko::dim<2>{A->get_size()[0], B->get_size()[1]});
-        std::vector<std ::tuple<int, int, double>> result;
-        spgemm<double, int>(A.get(), B.get(), 2, result, C.get());
+        spgemm<double, int>(A.get(), B.get(), C.get(), 2);
     }
 }
 BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
@@ -733,47 +765,9 @@ static void BM_REC_SpGEMM(benchmark::State& state)
                              gko::dim<2>{A->get_size()[0], B->get_size()[1]});
         auto a_T = gko::as<gko::matrix::Csr<double, int>>(A->transpose());
         auto b_T = gko::as<gko::matrix::Csr<double, int>>(B->transpose());
-        std::vector<std ::tuple<int, int, double>> result;
-        // rec_spgemm contains all the code down
-        /*
-       #pragma omp parallel
-       #pragma omp single
-               rec_spgemm<double,int>(A.get(),B.get(),a_T.get(),b_T.get(),2,result,C.get());
-       */
 #pragma omp parallel
-        {
-#pragma omp single
-            {
-                v_recursive_spgemm<double, int>(
-                    A.get(), B.get(), a_T.get(), b_T.get(), 2, 2, 0,
-                    a->get_size()[0], 0, b->get_size()[1], result);
-            }
-        }
-        std::sort(result.begin(), result.end());
-        auto c_row_ptrs = C->get_row_ptrs();
-        gko::matrix::CsrBuilder<double, int> c_builder{C.get()};
-        auto& c_col_idxs_array = c_builder.get_col_idx_array();
-        auto& c_vals_array = c_builder.get_value_array();
-        c_col_idxs_array.resize_and_reset(result.size());
-        c_vals_array.resize_and_reset(result.size());
-        auto c_col_idxs = c_col_idxs_array.get_data();
-        auto c_vals = c_vals_array.get_data();
-        c_row_ptrs[0] = 0;
-        auto local_nnz = 0;
-        auto c_nz = 0;
-        for (std::vector<std::tuple<int, int, double>>::const_iterator i =
-                 result.begin();
-             i != result.end(); ++i) {
-            c_row_ptrs[std::get<1>(*i) - 1] += 1;
-        }
-        prefix_sum(exec, c_row_ptrs, A->get_size()[0] + 1);
-        for (std::vector<std::tuple<int, int, double>>::const_iterator i =
-                 result.begin();
-             i != result.end(); ++i) {
-            c_col_idxs[c_nz] = std::get<1>(*i) - 1;
-            c_vals[c_nz] = std::get<2>(*i);
-            ++c_nz;
-        }
+       #pragma omp single
+        rec_spgemm<double,int>(A.get(),B.get(),C.get(),4);
     }
 }
 BENCHMARK(BM_REC_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
@@ -835,7 +829,6 @@ BENCHMARK(BM_OVERLAP);
 // Main for running benchmarks
 
 BENCHMARK_MAIN();
-
 
 // Main for running tests
 /*
