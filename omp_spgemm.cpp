@@ -347,6 +347,214 @@ void unit_spgemm3(
 }
 
 
+/**
+ * @internal
+ *
+ * Entry in a heap storing a column index and associated non-zero index
+ * (and row end) from a matrix.
+ *
+ * @tparam ValueType  The value type for matrices.
+ * @tparam IndexType  The index type for matrices.
+ */
+template <typename ValueType, typename IndexType>
+struct col_heap_element {
+    using value_type = ValueType;
+    using index_type = IndexType;
+    using    matrix_type = gko::matrix::Csr<ValueType, IndexType>;
+
+    IndexType idx;
+    IndexType end;
+    IndexType col;
+
+    ValueType val() const { return gko ::zero<ValueType>(); }
+
+    col_heap_element(IndexType idx, IndexType end, IndexType col, ValueType)
+        : idx{idx}, end{end}, col{col}
+    {}
+};
+
+
+/**
+ * @internal
+ *
+ * Entry in a heap storing an entry (value and column index) and associated
+ * non-zero index (and row end) from a matrix.
+ *
+ * @tparam ValueType  The value type for matrices.
+ * @tparam IndexType  The index type for matrices.
+ */
+template <typename ValueType, typename IndexType>
+struct val_heap_element {
+    using value_type = ValueType;
+    using index_type = IndexType;
+    using matrix_type = gko::matrix::Csr<ValueType, IndexType>;
+
+    IndexType idx;
+    IndexType end;
+    IndexType col;
+    ValueType val_;
+
+    ValueType val() const { return val_; }
+
+    val_heap_element(IndexType idx, IndexType end, IndexType col, ValueType val)
+        : idx{idx}, end{end}, col{col}, val_{val}
+    {}
+};
+
+
+/**
+ * @internal
+ *
+ * Restores the binary heap condition downwards from a given index.
+ *
+ * The heap condition is: col(child) >= col(parent)
+ *
+ * @param heap  a pointer to the array containing the heap elements.
+ * @param idx  the index of the starting heap node that potentially
+ *             violates the heap condition.
+ * @param size  the number of elements in the heap.
+ * @tparam HeapElement  the element type in the heap. See col_heap_element and
+ *                      val_heap_element
+ */
+template <typename HeapElement>
+void sift_down(HeapElement* heap, typename HeapElement::index_type idx,
+               typename HeapElement::index_type size)
+{
+    auto curcol = heap[idx].col;
+    while (idx * 2 + 1 < size) {
+        auto lchild = idx * 2 + 1;
+        auto rchild = gko::min(lchild + 1, size - 1);
+        auto lcol = heap[lchild].col;
+        auto rcol = heap[rchild].col;
+        auto mincol = gko::min(lcol, rcol);
+        if (mincol >= curcol) {
+            break;
+        }
+        auto minchild = lcol == mincol ? lchild : rchild;
+        std::swap(heap[minchild], heap[idx]);
+        idx = minchild;
+    }
+}
+template <typename ValueType, typename IndexType>
+ ValueType checked_load(const ValueType* p,
+                                                 IndexType i, IndexType size,
+                                                 ValueType sentinel)
+{
+    return i < size ? p[i] : sentinel;
+}
+
+/**
+ * @internal
+ *
+ * Generic SpGEMM implementation for a single output row of A * B using binary
+ * heap-based multiway merging.
+ *
+ * @param row  The row for which to compute the SpGEMM
+ * @param a  The input matrix A
+ * @param b  The input matrix B (its column indices must be sorted within each
+ *           row!)
+ * @param heap  The heap to use for this implementation. It must have as many
+ *              entries as the input row has non-zeros.
+ * @param step_cb  function that will be called for each accumulation from an
+ *                 entry of B into the output state. Its signature must be
+ *                 compatible with `step_cb(value, column, state)`.
+ * @param col_cb  function that will be called once for each output column after
+ *                all accumulations into it are completed. Its signature must be
+ *                compatible with `col_cb(column, state)`.
+ * @return the value initialized by init_cb and updated by step_cb and col_cb
+ * @note If the columns of B are not sorted, the output may have duplicate
+ *       column entries.
+ *
+ * @tparam HeapElement  the heap element type. See col_heap_element and
+ *                      val_heap_element
+ * @tparam InitCallback  functor type for init_cb
+ * @tparam StepCallback  functor type for step_cb
+ * @tparam ColCallback  functor type for col_cb
+ */
+template <typename HeapElement, typename StepCallback,
+          typename ColCallback,typename IndexType, typename ValueType>
+auto spgemm_multiway_merge(size_type row,
+                           const typename HeapElement::matrix_type* a,
+                           const typename HeapElement::matrix_type* b,
+                           std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result,
+                           HeapElement* heap,
+                           StepCallback step_cb, ColCallback col_cb,
+                           size_type start_a, size_type end_a,
+                           size_type start_b, size_type end_b)
+{
+    auto a_row_ptrs = a->get_const_row_ptrs();
+    auto a_cols = a->get_const_col_idxs();
+    auto a_vals = a->get_const_values();
+    auto b_row_ptrs = b->get_const_row_ptrs();
+    auto b_cols = b->get_const_col_idxs();
+    auto b_vals = b->get_const_values();
+    auto a_begin = a_row_ptrs[row];
+    auto a_end = a_row_ptrs[row + 1];
+
+    using index_type = typename HeapElement::index_type;
+    constexpr auto sentinel = std::numeric_limits<index_type>::max();
+
+    ValueType state = 0;
+
+    // initialize the heap
+    for (auto a_nz = a_begin; a_nz < a_end; ++a_nz) {
+        auto b_row = a_cols[a_nz];
+        auto b_begin = binary_search(
+            b_cols, start_b, b_row_ptrs[b_row], b_row_ptrs[b_row + 1] - 1);
+        auto b_end = binary_search(
+            b_cols, end_b, b_row_ptrs[b_row], b_row_ptrs[b_row + 1] - 1);
+        heap[a_nz] = {b_begin, b_end, checked_load(b_cols, b_begin, b_end, sentinel),
+                      a_vals[a_nz]};
+    }
+
+    if (a_begin != a_end) {
+        // make heap:
+        auto a_size = a_end - a_begin;
+        for (auto i = (a_size - 2) / 2; i >= 0; --i) {
+            sift_down(heap + a_begin, i, a_size);
+        }
+        auto& top = heap[a_begin];
+        auto& bot = heap[a_end - 1];
+        auto col = top.col;
+        while (top.col != sentinel) {
+            step_cb(b_vals[top.idx] * top.val(), top.col, state);
+            // move to the next element
+            top.idx++;
+            top.col = checked_load(b_cols, top.idx, top.end, sentinel);
+            sift_down(heap + a_begin, index_type{}, a_size);
+            if (top.col != col) {
+                col_cb(col, state);
+            }
+            col = top.col;
+        }
+    }
+    return state;
+}
+template <typename ValueType, typename IndexType>
+void unit_spgemm4(const gko::matrix::Csr<ValueType, IndexType>* a,
+            const gko::matrix::Csr<ValueType, IndexType>* b,
+            IndexType start_a, IndexType end_a,
+            IndexType start_b, IndexType end_b,
+            std::vector<std ::tuple<IndexType, IndexType, ValueType>>& result)
+{
+    auto num_rows = end_a-start_a;
+    gko::Array<val_heap_element<ValueType, IndexType>> heap_array(
+        exec, a->get_num_stored_elements());
+
+    auto heap = heap_array.get_data();
+    for (size_type a_row = start_a; a_row < end_a; ++a_row) {
+        spgemm_multiway_merge(
+            a_row, a, b, result,heap,
+            [](ValueType val, IndexType,
+               ValueType& state) { state+= val; },
+            [&](IndexType col, ValueType& state) {
+                result.push_back(std::tuple<int, int, double>(a_row+1,col+1,state));
+                state = gko::zero<ValueType>();
+            },start_a,end_a,start_b,end_b);
+    }
+}
+
+
 template <typename ValueType, typename IndexType>
 void spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
             gko::matrix::Csr<ValueType, IndexType>* b,
@@ -371,9 +579,11 @@ void spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
 
     // Calculation of all the small blocks
 std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for ordered
     for (auto row_idx = a_offsets.begin() + 1; row_idx < a_offsets.end();
          row_idx++) {
+        std::vector<std ::tuple<IndexType, IndexType, ValueType>> result2;
+        #pragma omp parallel for ordered
         for (auto col_idx = b_offsets.begin() + 1; col_idx < b_offsets.end();
              col_idx++) {
             // checking overlapping regions :
@@ -383,17 +593,24 @@ std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
                     result1;
                 /*unit_spgemm3<double, int>(a_T.get(), b, result1, *(row_idx -
                  *1), row_idx, *(col_idx - 1), *col_idx);/**/
-                /*unit_spgemm2<double, int>(a, b_T.get(), result1, *(row_idx -
-                 *1), row_idx, *(col_idx - 1), *col_idx);/**/
-                unit_spgemm<double, int>(exec, a, b, result1, *(row_idx - 1),
+                /*unit_spgemm2<double, int>(a, b_T.get(), result1, *(row_idx -1)
+                 , *row_idx, *(col_idx - 1), *col_idx);/**/
+                /*unit_spgemm<double, int>(a, b,result1, *(row_idx - 1),
                                          *row_idx, *(col_idx - 1),
                                          *col_idx); /**/
-#pragma omp critical
-                result.insert(result.end(), result1.begin(), result1.end());
+                unit_spgemm4<double, int>(a, b, *(row_idx - 1),
+                                         *row_idx, *(col_idx - 1),
+                                         *col_idx, result1); /**/
+            #pragma omp ordered
+            {std::vector<std ::tuple<IndexType, IndexType, ValueType>> result3(result2.size()+result1.size());
+            std::merge(result1.begin(),result1.end(),result2.begin(),result2.end(),result3.begin()) ;
+            result2=result3;}
+
             }
         }
+        #pragma omp ordered
+                result.insert(result.end(), std::make_move_iterator(result2.begin()), std::make_move_iterator(result2.end()));
     }
-    std::sort(result.begin(), result.end());
     auto c_row_ptrs = c->get_row_ptrs();
     gko::matrix::CsrBuilder<double, int> c_builder{c};
     auto& c_col_idxs_array = c_builder.get_col_idx_array();
@@ -404,23 +621,19 @@ std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
     auto c_vals = c_vals_array.get_data();
     c_row_ptrs[0] = 0;
     auto local_nnz = 0;
-    auto c_nz = 0;
+#pragma omp parallel for
     for (std::vector<std::tuple<int, int, double>>::const_iterator i =
              result.begin();
          i != result.end(); ++i) {
         c_row_ptrs[std::get<1>(*i) - 1] += 1;
     }
     prefix_sum(exec, c_row_ptrs, num_rows_c + 1);
-
-    for (std::vector<std::tuple<int, int, double>>::const_iterator i =
-             result.begin();
-         i != result.end(); ++i) {
-        // c_row_ptrs[std::get<0>(*i)]+=1;
-        c_col_idxs[c_nz] = std::get<1>(*i) - 1;
-        c_vals[c_nz] = std::get<2>(*i);
-        ++c_nz;
+#pragma omp parallel for 
+     for (IndexType i=0;i<result.size();i++)
+    {
+        c_col_idxs[i] = std::get<1>(result[i])-1;
+        c_vals[i] = std::get<2>(result[i]);
     }
-    // gko::write(std::cout, c);
 }
 
 template <typename ValueType, typename IndexType>
@@ -435,8 +648,10 @@ void h_recursive_spgemm(
     auto num_cols = end_b - start_b;
     auto b_T_row_ptrs = b_T->get_row_ptrs();
     if (h_recursive_splits == 0 || num_cols < 2) {
-        unit_spgemm<double, int>(exec, a, b, result, start_a, end_a, start_b,
+        /*unit_spgemm<double, int>( a, b, result, start_a, end_a, start_b,
                                  end_b); /**/
+        unit_spgemm4<double, int>( a, b, start_a, end_a, start_b,
+                                 end_b, result); /**/                         
         /*unit_spgemm3<double, int>(a_T, b, result, start_a, end_a, start_b,
                                   end_b);/**/
     } else if (overlap<double, int>(a, b_T, start_a, end_a, start_b, end_b)) {
@@ -445,15 +660,16 @@ void h_recursive_spgemm(
             start_b, end_b);
         std::vector<std ::tuple<IndexType, IndexType, ValueType>> result1;
         std::vector<std ::tuple<IndexType, IndexType, ValueType>> result2;
-#pragma omp task shared(result1)
+#pragma omp task shared(result1) untied
         h_recursive_spgemm(a, b, a_T, b_T, h_recursive_splits - 1, start_a,
                            end_a, start_b, b_idx, result1);
-#pragma omp task shared(result2)
+#pragma omp task shared(result2)untied
         h_recursive_spgemm(a, b, a_T, b_T, h_recursive_splits - 1, start_a,
                            end_a, b_idx, end_b, result2);
 #pragma omp taskwait
-        result.insert(result.end(), result1.begin(), result1.end());
-        result.insert(result.end(), result2.begin(), result2.end());
+        std::vector<std ::tuple<IndexType, IndexType, ValueType>> result3(result1.size()+result2.size());
+        std::merge(result1.begin(),result1.end(),result2.begin(),result2.end(),result3.begin()) ;
+        result.insert(result.end(), std::make_move_iterator(result3.begin()), std::make_move_iterator(result3.end()));
     }
 }
 
@@ -478,17 +694,17 @@ void v_recursive_spgemm(
             end_a);
         std::vector<std ::tuple<IndexType, IndexType, ValueType>> result1;
         std::vector<std ::tuple<IndexType, IndexType, ValueType>> result2;
-#pragma omp task shared(result1)
+#pragma omp task shared(result1) untied
         v_recursive_spgemm(a, b, a_T, b_T, v_recursive_splits - 1,
                            h_recursive_splits, start_a, a_idx, start_b, end_b,
                            result1);
-#pragma omp task shared(result2)
+#pragma omp task shared(result2) untied
         v_recursive_spgemm(a, b, a_T, b_T, v_recursive_splits - 1,
                            h_recursive_splits, a_idx, end_a, start_b, end_b,
                            result2);
 #pragma omp taskwait
-        result.insert(result.end(), result1.begin(), result1.end());
-        result.insert(result.end(), result2.begin(), result2.end());
+        result.insert(result.end(), std::make_move_iterator(result1.begin()), std::make_move_iterator( result1.end()));
+        result.insert(result.end(), std::make_move_iterator(result2.begin()), std::make_move_iterator( result2.end()));
     }
 }
 
@@ -501,10 +717,15 @@ void rec_spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
     auto a_T = gko::as<gko::matrix::Csr<double, int>>(a->transpose());
     auto b_T = gko::as<gko::matrix::Csr<double, int>>(b->transpose());
     std::vector<std ::tuple<IndexType, IndexType, ValueType>> result;
-    v_recursive_spgemm<ValueType, IndexType>(
-        a, b, a_T.get(), b_T.get(), recursive_splits, recursive_splits, 0,
-        a->get_size()[0], 0, b->get_size()[1], result);
-    std::sort(result.begin(), result.end());
+    #pragma omp parallel
+    {
+        #pragma omp single
+            {
+            v_recursive_spgemm<ValueType, IndexType>(
+            a, b, a_T.get(), b_T.get(), recursive_splits, recursive_splits, 0,
+            a->get_size()[0], 0, b->get_size()[1], result);
+            }
+    }
     auto c_row_ptrs = c->get_row_ptrs();
     gko::matrix::CsrBuilder<double, int> c_builder{c};
     auto& c_col_idxs_array = c_builder.get_col_idx_array();
@@ -515,19 +736,18 @@ void rec_spgemm(gko::matrix::Csr<ValueType, IndexType>* a,
     auto c_vals = c_vals_array.get_data();
     c_row_ptrs[0] = 0;
     auto local_nnz = 0;
-    auto c_nz = 0;
+#pragma omp parallel for
     for (std::vector<std::tuple<int, int, double>>::const_iterator i =
              result.begin();
          i != result.end(); ++i) {
         c_row_ptrs[std::get<1>(*i) - 1] += 1;
     }
     prefix_sum(exec, c_row_ptrs, a->get_size()[0] + 1);
-    for (std::vector<std::tuple<int, int, double>>::const_iterator i =
-             result.begin();
-         i != result.end(); ++i) {
-        c_col_idxs[c_nz] = std::get<1>(*i) - 1;
-        c_vals[c_nz] = std::get<2>(*i);
-        ++c_nz;
+#pragma omp parallel for 
+    for (IndexType i=0;i<result.size();i++)
+    {
+        c_col_idxs[i] = std::get<1>(result[i])-1;
+        c_vals[i] = std::get<2>(result[i]);
     }
 }
 
@@ -730,7 +950,7 @@ static void BM_OLD_SpGEMM(benchmark::State& state)
         A->apply(B.get(), C.get());
     }
 }
-BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
+BENCHMARK(BM_OLD_SpGEMM)->Arg(4)->Arg(7)->Arg(19)->Arg(6)->Arg(8)->Arg(5);
 
 static void BM_SpGEMM(benchmark::State& state)
 {
@@ -748,7 +968,7 @@ static void BM_SpGEMM(benchmark::State& state)
         spgemm<double, int>(A.get(), B.get(), C.get(), 2);
     }
 }
-BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
+BENCHMARK(BM_SpGEMM)->Arg(4)->Arg(7)->Arg(19)->Arg(6)->Arg(8)->Arg(5);
 
 static void BM_REC_SpGEMM(benchmark::State& state)
 {
@@ -767,10 +987,10 @@ static void BM_REC_SpGEMM(benchmark::State& state)
         auto b_T = gko::as<gko::matrix::Csr<double, int>>(B->transpose());
 #pragma omp parallel
        #pragma omp single
-        rec_spgemm<double,int>(A.get(),B.get(),C.get(),4);
+        rec_spgemm<double,int>(A.get(),B.get(),C.get(),1);
     }
 }
-BENCHMARK(BM_REC_SpGEMM)->Arg(4)->Arg(5)->Arg(6)->Arg(7)->Arg(8)->Arg(19);
+BENCHMARK(BM_REC_SpGEMM)->Arg(4)->Arg(7)->Arg(19)->Arg(6)->Arg(8)->Arg(5);
 
 /*
 
